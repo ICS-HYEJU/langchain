@@ -19,14 +19,9 @@ graph_builder = StateGraph(AgentState)
 
 # %%
 from langchain_chroma import Chroma
-from langchain_openai import AzureOpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 
-# embedding_function = OpenAIEmbeddings(model='text-embedding-3-large')
-embedding_function = AzureOpenAIEmbeddings(
-    model='text-embedding-3-large',
-    azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT'),
-    api_key=os.getenv('AZURE_OPENAI_API_KEY')
-)
+embedding_function = OpenAIEmbeddings(model='text-embedding-3-large')
 vector_store = Chroma(
     embedding_function=embedding_function,
     collection_name = 'real_estate_tax',
@@ -38,7 +33,7 @@ retriever = vector_store.as_retriever(search_kwargs={'k': 3})
 query = '5억짜리 집 1채, 10억짜리 집 1채, 20억짜리 집 1채를 가지고 있을 때 세금을 얼마나 내나요?'
 
 # %%
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain import hub
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
@@ -46,10 +41,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 rag_prompt = hub.pull('rlm/rag-prompt')
 
-llm = AzureChatOpenAI(
-    azure_deployment='gpt-4o-2024-11-20',
-    api_version='2024-08-01-preview',   
-)
+llm = ChatOpenAI(model='gpt-4o')
 
 # %%
 

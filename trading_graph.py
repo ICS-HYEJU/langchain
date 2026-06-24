@@ -9,17 +9,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # %%
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import ChatOpenAI
 
-llm = AzureChatOpenAI(
-    azure_deployment='gpt-4o-2024-11-20',
-    api_version='2024-08-01-preview',   
-)
+llm = ChatOpenAI(model='gpt-4o')
 
-small_llm = AzureChatOpenAI(
-    azure_deployment='gpt-4o-mini-2024-07-18',
-    api_version='2024-08-01-preview',
-)
+small_llm = ChatOpenAI(model='gpt-4o-mini')
 
 
 # %%

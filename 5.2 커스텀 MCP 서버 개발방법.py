@@ -8,7 +8,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from langchain import hub
 from langchain_chroma import Chroma
-from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
@@ -27,24 +27,12 @@ load_dotenv()
 mcp = FastMCP("house_tax")
 
 # 언어 모델 초기화
-llm = AzureChatOpenAI(
-    azure_deployment='gpt-4o-2024-11-20',
-    api_version='2024-08-01-preview',   
-    temperature=0
-)
+llm = ChatOpenAI(model='gpt-4o', temperature=0)
 
-small_llm = AzureChatOpenAI(
-    azure_deployment='gpt-4o-mini-2024-07-18',
-    api_version='2024-08-01-preview',
-    temperature=0
-)
+small_llm = ChatOpenAI(model='gpt-4o-mini', temperature=0)
 
 # 임베딩 및 벡터 저장소 초기화
-embedding_function = AzureOpenAIEmbeddings(
-    model='text-embedding-3-large',
-    azure_endpoint=os.getenv('AZURE_OPENAI_EMBEDDING_ENDPOINT'),
-    api_key=os.getenv('AZURE_OPENAI_EMBEDDING_API_KEY')
-)
+embedding_function = OpenAIEmbeddings(model='text-embedding-3-large')
 
 vector_store = Chroma(
     embedding_function=embedding_function,

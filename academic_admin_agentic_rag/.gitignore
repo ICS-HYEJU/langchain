@@ -1,0 +1,5 @@
+vector_store/
+data/private_documents/*
+!data/private_documents/.gitkeep
+__pycache__/
+*.pyc
