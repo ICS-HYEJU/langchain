@@ -52,7 +52,10 @@ if question:
                     {
                         "rewritten_question": result.get("rewritten_question"),
                         "document_count": len(result.get("documents", [])),
+                        "relevant_document_count": result.get("relevant_document_count", 0),
                         "attempts": result.get("attempts", 0),
+                        "used_web_search": result.get("used_web_search", False),
+                        "web_result_count": len(result.get("web_results", [])),
                         "remembered_messages": len(chat_history),
                     }
                 )

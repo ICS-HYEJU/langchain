@@ -8,6 +8,7 @@
 - 사용자 질문과 관련된 문서 검색
 - 검색 결과의 관련성 평가
 - 검색이 부족하면 질문 재작성 후 재검색
+- 재검색 후에도 근거가 부족하면 KHU 도메인 웹검색을 보조 근거로 검토
 - 근거 문서 기반 답변 생성
 - Streamlit UI로 질의응답 확인
 - 현재 브라우저 세션의 과거 대화 내용을 기억하고 후속 질문에 반영
@@ -60,6 +61,23 @@ academic_admin_agentic_rag/data/private_documents/
 
 `private_documents/`에 실제 문서가 있으면 기본적으로 샘플 문서는 제외하고 실제 문서만 적재합니다.
 샘플 문서까지 함께 적재하려면 `--include-sample` 옵션을 사용합니다.
+
+## 관련 문서 충분성 판단과 웹검색
+
+검색된 각 문서는 LLM grader가 질문에 답하는 데 구체적으로 도움이 되는지 `yes/no`로 평가합니다.
+`yes`로 평가된 관련 문서 수가 `ACADEMIC_RAG_MIN_RELEVANT_DOCS` 이상이면 충분하다고 판단합니다.
+기본값은 1개입니다.
+
+충분하지 않으면 질문을 한 번 재작성해 다시 검색합니다.
+재검색 후에도 충분하지 않으면 웹검색을 수행합니다.
+기본 웹검색 도메인은 `khu.ac.kr`입니다.
+
+```powershell
+$env:ACADEMIC_RAG_MIN_RELEVANT_DOCS="1"
+$env:ACADEMIC_RAG_ENABLE_WEB_SEARCH="true"
+$env:ACADEMIC_RAG_WEB_SEARCH_DOMAIN="khu.ac.kr"
+$env:ACADEMIC_RAG_WEB_SEARCH_MAX_RESULTS="5"
+```
 
 ## 2. 터미널에서 질문하기
 

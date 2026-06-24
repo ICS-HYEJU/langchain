@@ -4,13 +4,16 @@ flowchart TD
     GRADE["grade_documents<br/>검색 문서 관련성 평가"]
     DECIDE{"관련 문서가 충분한가?"}
     REWRITE["rewrite_question<br/>질문 재작성"]
+    WEB["web_search<br/>KHU 도메인 웹검색"]
     GENERATE["generate_answer<br/>근거 기반 답변 생성"]
     END([END])
 
     START --> RETRIEVE
     RETRIEVE --> GRADE
     GRADE --> DECIDE
-    DECIDE -- "아니오, 재작성 1회 미만" --> REWRITE
+    DECIDE -- "충분" --> GENERATE
+    DECIDE -- "부족, 재작성 1회 미만" --> REWRITE
     REWRITE --> RETRIEVE
-    DECIDE -- "예 또는 재작성 완료" --> GENERATE
+    DECIDE -- "부족, 재작성 후에도 부족" --> WEB
+    WEB --> GENERATE
     GENERATE --> END

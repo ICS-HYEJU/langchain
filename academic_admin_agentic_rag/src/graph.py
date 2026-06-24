@@ -11,6 +11,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langgraph.graph import END, START, StateGraph
 
+try:
+    from duckduckgo_search import DDGS
+except ImportError:  # pragma: no cover
+    DDGS = None
+
 if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -18,8 +23,12 @@ from src.config import (  # noqa: E402
     CHAT_MODEL,
     COLLECTION_NAME,
     EMBEDDING_MODEL,
+    ENABLE_WEB_SEARCH,
+    MIN_RELEVANT_DOCS,
     RETRIEVAL_K,
     VECTOR_STORE_DIR,
+    WEB_SEARCH_DOMAIN,
+    WEB_SEARCH_MAX_RESULTS,
 )
 
 
@@ -28,9 +37,12 @@ class AgentState(TypedDict, total=False):
     chat_history: list[dict[str, str]]
     rewritten_question: str
     documents: list[Document]
+    web_results: list[dict[str, str]]
     answer: str
     needs_rewrite: bool
+    used_web_search: bool
     attempts: int
+    relevant_document_count: int
 
 
 def _build_vector_store() -> Chroma:
@@ -52,7 +64,10 @@ retrieval_grader_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             """You grade whether a retrieved university academic administration document
-is useful for answering the user's question. Respond with only yes or no.""",
+is useful for answering the user's question. Respond with only yes or no.
+
+Answer yes only when the document contains concrete information that can help answer
+the question. Answer no for unrelated, generic, or insufficient passages.""",
         ),
         (
             "human",
@@ -79,15 +94,15 @@ answer_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             """당신은 대학 학사행정 문서 질의응답 도우미입니다.
-반드시 제공된 근거 문서와 이전 대화 맥락에 기반해 한국어로 답변하세요.
+반드시 제공된 근거 문서, 웹검색 보조 근거, 이전 대화 맥락에 기반해 한국어로 답변하세요.
+최종 사실 판단은 내부 학사행정 문서를 우선하고, 웹검색 결과는 내부 문서가 부족할 때 보조 근거로만 사용하세요.
 근거가 부족하면 추측하지 말고 확인이 필요하다고 말하세요.
-이전 대화 내용은 사용자의 후속 질문을 해석하는 용도로만 사용하고,
-최종 사실 판단은 근거 문서를 우선하세요.
-답변 끝에는 참고한 문서 출처를 간단히 적으세요.""",
+이전 대화 내용은 사용자의 후속 질문을 해석하는 용도로만 사용하세요.
+답변 끝에는 참고한 문서 또는 웹 출처를 간단히 적으세요.""",
         ),
         (
             "human",
-            "이전 대화:\n{chat_history}\n\n질문:\n{question}\n\n근거 문서:\n{context}",
+            "이전 대화:\n{chat_history}\n\n질문:\n{question}\n\n근거 문서:\n{context}\n\n웹검색 보조 근거:\n{web_context}",
         ),
     ]
 )
@@ -120,6 +135,7 @@ def retrieve(state: AgentState) -> AgentState:
         **state,
         "documents": documents,
         "attempts": state.get("attempts", 0),
+        "used_web_search": state.get("used_web_search", False),
     }
 
 
@@ -138,16 +154,22 @@ def grade_documents(state: AgentState) -> AgentState:
         if grade.startswith("y"):
             relevant_docs.append(doc)
 
+    relevant_count = len(relevant_docs)
     return {
         **state,
         "documents": relevant_docs,
-        "needs_rewrite": not relevant_docs,
+        "relevant_document_count": relevant_count,
+        "needs_rewrite": relevant_count < MIN_RELEVANT_DOCS,
     }
 
 
-def decide_after_grading(state: AgentState) -> Literal["rewrite", "generate"]:
-    if state.get("needs_rewrite") and state.get("attempts", 0) < 1:
+def decide_after_grading(state: AgentState) -> Literal["rewrite", "web_search", "generate"]:
+    if not state.get("needs_rewrite"):
+        return "generate"
+    if state.get("attempts", 0) < 1:
         return "rewrite"
+    if ENABLE_WEB_SEARCH and not state.get("used_web_search", False):
+        return "web_search"
     return "generate"
 
 
@@ -166,23 +188,73 @@ def rewrite_question(state: AgentState) -> AgentState:
     }
 
 
-def generate_answer(state: AgentState) -> AgentState:
-    documents = state.get("documents", [])
-    if not documents:
+def web_search(state: AgentState) -> AgentState:
+    if DDGS is None:
         return {
             **state,
-            "answer": "관련 학사행정 문서를 찾지 못했습니다. 문서를 추가로 적재하거나 질문을 더 구체화해 주세요.",
+            "used_web_search": True,
+            "web_results": [
+                {
+                    "title": "web search unavailable",
+                    "href": "",
+                    "body": "duckduckgo_search package is not installed.",
+                }
+            ],
         }
 
-    context = "\n\n".join(
+    question = state.get("rewritten_question") or state["question"]
+    search_query = f"site:{WEB_SEARCH_DOMAIN} {question}"
+    results: list[dict[str, str]] = []
+    with DDGS() as ddgs:
+        for item in ddgs.text(search_query, max_results=WEB_SEARCH_MAX_RESULTS):
+            results.append(
+                {
+                    "title": item.get("title", ""),
+                    "href": item.get("href", ""),
+                    "body": item.get("body", ""),
+                }
+            )
+
+    return {
+        **state,
+        "used_web_search": True,
+        "web_results": results,
+    }
+
+
+def format_document_context(documents: list[Document]) -> str:
+    if not documents:
+        return "No sufficiently relevant internal document was found."
+    return "\n\n".join(
         f"[source: {doc.metadata.get('source', 'unknown')}]\n{doc.page_content}"
         for doc in documents
     )
+
+
+def format_web_context(web_results: list[dict[str, str]] | None) -> str:
+    if not web_results:
+        return "No web search was used."
+    return "\n\n".join(
+        f"[web: {result.get('title', 'untitled')}]\nURL: {result.get('href', '')}\n{result.get('body', '')}"
+        for result in web_results
+    )
+
+
+def generate_answer(state: AgentState) -> AgentState:
+    documents = state.get("documents", [])
+    web_results = state.get("web_results", [])
+    if not documents and not web_results:
+        return {
+            **state,
+            "answer": "관련 학사행정 문서나 웹검색 보조 근거를 찾지 못했습니다. 문서를 추가로 적재하거나 질문을 더 구체화해 주세요.",
+        }
+
     chain = answer_prompt | llm | StrOutputParser()
     answer = chain.invoke(
         {
             "question": state["question"],
-            "context": context,
+            "context": format_document_context(documents),
+            "web_context": format_web_context(web_results),
             "chat_history": format_chat_history(state.get("chat_history")),
         }
     )
@@ -194,6 +266,7 @@ def build_graph():
     graph_builder.add_node("retrieve", retrieve)
     graph_builder.add_node("grade_documents", grade_documents)
     graph_builder.add_node("rewrite_question", rewrite_question)
+    graph_builder.add_node("web_search", web_search)
     graph_builder.add_node("generate_answer", generate_answer)
 
     graph_builder.add_edge(START, "retrieve")
@@ -203,10 +276,12 @@ def build_graph():
         decide_after_grading,
         {
             "rewrite": "rewrite_question",
+            "web_search": "web_search",
             "generate": "generate_answer",
         },
     )
     graph_builder.add_edge("rewrite_question", "retrieve")
+    graph_builder.add_edge("web_search", "generate_answer")
     graph_builder.add_edge("generate_answer", END)
     return graph_builder.compile()
 
