@@ -51,6 +51,9 @@ academic_admin_agentic_rag/data/private_documents/
 
 지원 형식: `.txt`, `.md`, `.pdf`
 
+`private_documents/`에 실제 문서가 있으면 기본적으로 샘플 문서는 제외하고 실제 문서만 적재합니다.
+샘플 문서까지 함께 적재하려면 `--include-sample` 옵션을 사용합니다.
+
 ## 2. 터미널에서 질문하기
 
 ```powershell
