@@ -3,6 +3,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Literal, TypedDict
+from urllib.parse import urlparse
+
+import requests
+from bs4 import BeautifulSoup
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -199,6 +203,16 @@ def decide_after_grading(state: AgentState) -> Literal["rewrite", "web_search", 
 
 def assess_context_sufficiency(state: AgentState) -> AgentState:
     documents = state.get("documents", [])
+    if should_force_web_search(state["question"]):
+        return {
+            **state,
+            "needs_web_search": ENABLE_WEB_SEARCH and not state.get("used_web_search", False),
+            "sufficiency_reason": (
+                "Question asks for department-specific, current, or web-published information; "
+                "web search is required even if internal documents are topically related."
+            ),
+        }
+
     if not documents:
         return {
             **state,
@@ -246,43 +260,171 @@ def rewrite_question(state: AgentState) -> AgentState:
     }
 
 
+def should_force_web_search(question: str) -> bool:
+    department_terms = ("학과", "전공", "전자공학", "전자공학과", "전자정보")
+    graduation_terms = ("졸업학점", "졸업 학점", "이수학점", "전공학점", "졸업요건", "교육과정")
+    current_terms = ("최신", "현재", "공지", "일정", "신청기간", "URL", "링크", "홈페이지", "양식")
+
+    asks_department_graduation = any(term in question for term in department_terms) and any(
+        term in question for term in graduation_terms
+    )
+    asks_current_web_info = any(term in question for term in current_terms)
+    return asks_department_graduation or asks_current_web_info
+
+
 def web_search(state: AgentState) -> AgentState:
     question = state.get("rewritten_question") or state["question"]
-    search_query = f"site:{WEB_SEARCH_DOMAIN} {question}"
-
-    if DDGS is None:
-        return {
-            **state,
-            "used_web_search": True,
-            "web_search_error": "duckduckgo_search package is not installed.",
-            "web_results": [],
-        }
+    search_queries = build_web_search_queries(question)
 
     results: list[dict[str, str]] = []
-    try:
-        with DDGS() as ddgs:
-            for item in ddgs.text(search_query, max_results=WEB_SEARCH_MAX_RESULTS):
-                results.append(
-                    {
-                        "title": item.get("title", ""),
-                        "href": item.get("href", ""),
-                        "body": item.get("body", ""),
-                    }
-                )
-    except Exception as exc:  # pragma: no cover - depends on network/search provider
-        return {
-            **state,
-            "used_web_search": True,
-            "web_search_error": f"{type(exc).__name__}: {exc}",
-            "web_results": [],
-        }
+    errors: list[str] = []
+
+    if DDGS is not None:
+        ddg_results, ddg_errors = search_duckduckgo(search_queries)
+        results.extend(ddg_results)
+        errors.extend(ddg_errors)
+    else:
+        errors.append("duckduckgo_search package is not installed.")
+
+    if len(results) < WEB_SEARCH_MAX_RESULTS:
+        bing_results, bing_errors = search_bing(search_queries)
+        results.extend(bing_results)
+        errors.extend(bing_errors)
+
+    if len(results) < WEB_SEARCH_MAX_RESULTS:
+        direct_results, direct_errors = search_candidate_pages(question)
+        results.extend(direct_results)
+        errors.extend(direct_errors)
+
+    results = dedupe_web_results(results)[:WEB_SEARCH_MAX_RESULTS]
 
     return {
         **state,
         "used_web_search": True,
-        "web_search_error": "" if results else f"No web results for query: {search_query}",
+        "web_search_error": "" if results else "; ".join(errors) or "No web results found.",
         "web_results": results,
     }
+
+
+def build_web_search_queries(question: str) -> list[str]:
+    base_query = f"site:{WEB_SEARCH_DOMAIN} {question}"
+    queries = [base_query]
+
+    if any(keyword in question for keyword in ("전자공학", "전자공학과", "전자정보")):
+        queries.extend(
+            [
+                "경희대학교 전자공학과 졸업 학점",
+                "경희대학교 전자정보대학 전자공학과 졸업요건",
+                "site:ce.khu.ac.kr 전자공학과 졸업 학점",
+                "site:ce.khu.ac.kr 졸업학점 전공필수 전자공학과",
+            ]
+        )
+
+    if "졸업" in question and "학점" in question:
+        queries.append(f"경희대학교 {question} 교육과정 졸업요건")
+
+    return list(dict.fromkeys(queries))
+
+
+def search_duckduckgo(queries: list[str]) -> tuple[list[dict[str, str]], list[str]]:
+    results: list[dict[str, str]] = []
+    errors: list[str] = []
+    for query in queries:
+        for backend in ("html", "lite", "auto"):
+            try:
+                with DDGS() as ddgs:
+                    items = ddgs.text(query, backend=backend, max_results=WEB_SEARCH_MAX_RESULTS)
+                results.extend(normalize_search_item(item) for item in items)
+                if results:
+                    return results, errors
+            except Exception as exc:  # pragma: no cover - depends on search provider
+                errors.append(f"DuckDuckGo {backend} failed for '{query}': {type(exc).__name__}: {exc}")
+    return results, errors
+
+
+def search_bing(queries: list[str]) -> tuple[list[dict[str, str]], list[str]]:
+    results: list[dict[str, str]] = []
+    errors: list[str] = []
+    for query in queries:
+        try:
+            response = requests.get(
+                "https://www.bing.com/search",
+                params={"q": query},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=12,
+            )
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            for item in soup.select("li.b_algo"):
+                title = item.find("h2")
+                link = title.find("a") if title else None
+                snippet = item.find("p")
+                href = link.get("href", "") if link else ""
+                if not href:
+                    continue
+                results.append(
+                    {
+                        "title": title.get_text(" ", strip=True) if title else href,
+                        "href": href,
+                        "body": snippet.get_text(" ", strip=True) if snippet else "",
+                    }
+                )
+            if results:
+                return results, errors
+        except Exception as exc:  # pragma: no cover - depends on network/search provider
+            errors.append(f"Bing failed for '{query}': {type(exc).__name__}: {exc}")
+    return results, errors
+
+
+def search_candidate_pages(question: str) -> tuple[list[dict[str, str]], list[str]]:
+    candidate_urls = [
+        "https://ce.khu.ac.kr/",
+        "https://www.khu.ac.kr/",
+        "https://haksa.khu.ac.kr/",
+    ]
+    results: list[dict[str, str]] = []
+    errors: list[str] = []
+    keywords = [token for token in ("전자공학", "졸업", "학점", "교육과정", "전자정보") if token in question]
+
+    for url in candidate_urls:
+        try:
+            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            text = soup.get_text(" ", strip=True)
+            if keywords and not any(keyword in text for keyword in keywords):
+                continue
+            results.append(
+                {
+                    "title": soup.title.get_text(" ", strip=True) if soup.title else urlparse(url).netloc,
+                    "href": url,
+                    "body": text[:500],
+                }
+            )
+        except Exception as exc:  # pragma: no cover
+            errors.append(f"Direct page failed for '{url}': {type(exc).__name__}: {exc}")
+    return results, errors
+
+
+def normalize_search_item(item: dict[str, str]) -> dict[str, str]:
+    return {
+        "title": item.get("title", ""),
+        "href": item.get("href", ""),
+        "body": item.get("body", ""),
+    }
+
+
+def dedupe_web_results(results: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    deduped: list[dict[str, str]] = []
+    for result in results:
+        href = result.get("href", "")
+        key = href or result.get("title", "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(result)
+    return deduped
 
 
 def format_document_context(documents: list[Document]) -> str:

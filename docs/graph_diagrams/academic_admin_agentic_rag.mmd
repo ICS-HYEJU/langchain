@@ -4,9 +4,10 @@ flowchart TD
     GRADE["grade_documents<br/>검색 문서 관련성 평가"]
     DECIDE_RELEVANCE{"관련 문서가<br/>최소 기준 이상인가?"}
     ASSESS["assess_context_sufficiency<br/>답변 충분성 평가"]
+    FORCE_WEB{"학과별/최신성<br/>웹정보 질문인가?"}
     DECIDE_SUFFICIENCY{"내부 문서만으로<br/>답변 가능한가?"}
     REWRITE["rewrite_question<br/>질문 재작성"]
-    WEB["web_search<br/>KHU 도메인 웹검색"]
+    WEB["web_search<br/>DDG/Bing/KHU 후보 페이지 검색"]
     GENERATE["generate_answer<br/>근거 기반 답변 생성"]
     END([END])
 
@@ -17,7 +18,9 @@ flowchart TD
     REWRITE --> RETRIEVE
     DECIDE_RELEVANCE -- "관련 문서 부족, 재작성 후에도 부족" --> WEB
     DECIDE_RELEVANCE -- "관련 문서 있음" --> ASSESS
-    ASSESS --> DECIDE_SUFFICIENCY
+    ASSESS --> FORCE_WEB
+    FORCE_WEB -- "예" --> WEB
+    FORCE_WEB -- "아니오" --> DECIDE_SUFFICIENCY
     DECIDE_SUFFICIENCY -- "충분" --> GENERATE
     DECIDE_SUFFICIENCY -- "충분하지 않음" --> WEB
     WEB --> GENERATE
