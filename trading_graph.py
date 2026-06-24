@@ -43,7 +43,10 @@ market_research_tools = [YahooFinanceNewsTool()] + polygon_tools
 market_research_agent = create_react_agent(
     llm, 
     tools=market_research_tools, 
-    state_modifier='You are a market researcher. Provide fact only not opinions'
+    state_modifier=(
+        'You are a market researcher. Provide facts only, not opinions. '
+        'Always write your final response in Korean.'
+    )
 )
 
 def market_research_node(state: MessagesState) -> Command[Literal["supervisor"]]:
@@ -80,7 +83,12 @@ def get_stock_price(ticker: str) -> dict:
 
 stock_research_tools = [get_stock_price]
 stock_research_agent = create_react_agent(
-    llm, tools=stock_research_tools, state_modifier='You are a stock researcher. Provide facts only not opinions'
+    llm,
+    tools=stock_research_tools,
+    state_modifier=(
+        'You are a stock researcher. Provide facts only, not opinions. '
+        'Always write your final response in Korean.'
+    ),
 )
 
 def stock_research_node(state: MessagesState) -> Command[Literal["supervisor"]]:
@@ -115,7 +123,12 @@ def company_research_tool(ticker: str) -> dict:
 
 company_research_tools = [company_research_tool]
 company_research_agent = create_react_agent(
-    llm, tools=company_research_tools, state_modifier='You are a company researcher. Provide facts only not opinions'
+    llm,
+    tools=company_research_tools,
+    state_modifier=(
+        'You are a company researcher. Provide facts only, not opinions. '
+        'Always write your final response in Korean.'
+    ),
 )
 
 def company_research_node(state: MessagesState) -> Command[Literal["supervisor"]]:
@@ -140,8 +153,11 @@ def company_research_node(state: MessagesState) -> Command[Literal["supervisor"]
 from langchain_core.prompts import PromptTemplate
 
 analyst_prompt = PromptTemplate.from_template(
-    """You are a stock market analyst. Given the following information, 
-Please decide wheter to buy, sell, or hold the stock.
+    """You are a stock market analyst. Given the following information,
+please decide whether to buy, sell, or hold the stock.
+Write the entire answer in Korean.
+Use clear Korean section headings and include the final decision as one of:
+"매수", "매도", or "보유".
 
 Information:
 {messages}"""
