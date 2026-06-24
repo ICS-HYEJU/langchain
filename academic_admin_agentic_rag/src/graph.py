@@ -25,6 +25,7 @@ from src.config import (  # noqa: E402
 
 class AgentState(TypedDict, total=False):
     question: str
+    chat_history: list[dict[str, str]]
     rewritten_question: str
     documents: list[Document]
     answer: str
@@ -66,9 +67,10 @@ rewrite_prompt = ChatPromptTemplate.from_messages(
             "system",
             """You rewrite user questions for retrieval over Korean university academic
 administration documents. Preserve the user's intent and expand abbreviations when useful.
+Use the previous conversation only when the current question depends on it.
 Respond with only the rewritten Korean search question.""",
         ),
-        ("human", "{question}"),
+        ("human", "Previous conversation:\n{chat_history}\n\nCurrent question:\n{question}"),
     ]
 )
 
@@ -77,20 +79,42 @@ answer_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             """당신은 대학 학사행정 문서 질의응답 도우미입니다.
-반드시 제공된 근거 문서에 기반해 한국어로 답변하세요.
+반드시 제공된 근거 문서와 이전 대화 맥락에 기반해 한국어로 답변하세요.
 근거가 부족하면 추측하지 말고 확인이 필요하다고 말하세요.
+이전 대화 내용은 사용자의 후속 질문을 해석하는 용도로만 사용하고,
+최종 사실 판단은 근거 문서를 우선하세요.
 답변 끝에는 참고한 문서 출처를 간단히 적으세요.""",
         ),
         (
             "human",
-            "질문:\n{question}\n\n근거 문서:\n{context}",
+            "이전 대화:\n{chat_history}\n\n질문:\n{question}\n\n근거 문서:\n{context}",
         ),
     ]
 )
 
 
-def retrieve(state: AgentState) -> AgentState:
+def format_chat_history(chat_history: list[dict[str, str]] | None) -> str:
+    if not chat_history:
+        return "No previous conversation."
+
+    formatted_messages = []
+    for message in chat_history[-8:]:
+        role = message.get("role", "unknown")
+        content = message.get("content", "")
+        formatted_messages.append(f"{role}: {content}")
+    return "\n".join(formatted_messages)
+
+
+def build_retrieval_question(state: AgentState) -> str:
     question = state.get("rewritten_question") or state["question"]
+    chat_history = format_chat_history(state.get("chat_history"))
+    if chat_history == "No previous conversation.":
+        return question
+    return f"Previous conversation:\n{chat_history}\n\nCurrent question:\n{question}"
+
+
+def retrieve(state: AgentState) -> AgentState:
+    question = build_retrieval_question(state)
     documents = retriever.invoke(question)
     return {
         **state,
@@ -100,7 +124,7 @@ def retrieve(state: AgentState) -> AgentState:
 
 
 def grade_documents(state: AgentState) -> AgentState:
-    question = state.get("rewritten_question") or state["question"]
+    question = build_retrieval_question(state)
     chain = retrieval_grader_prompt | llm | StrOutputParser()
 
     relevant_docs: list[Document] = []
@@ -129,7 +153,12 @@ def decide_after_grading(state: AgentState) -> Literal["rewrite", "generate"]:
 
 def rewrite_question(state: AgentState) -> AgentState:
     chain = rewrite_prompt | llm | StrOutputParser()
-    rewritten = chain.invoke({"question": state["question"]}).strip()
+    rewritten = chain.invoke(
+        {
+            "question": state["question"],
+            "chat_history": format_chat_history(state.get("chat_history")),
+        }
+    ).strip()
     return {
         **state,
         "rewritten_question": rewritten,
@@ -154,6 +183,7 @@ def generate_answer(state: AgentState) -> AgentState:
         {
             "question": state["question"],
             "context": context,
+            "chat_history": format_chat_history(state.get("chat_history")),
         }
     )
     return {**state, "answer": answer}
@@ -184,6 +214,6 @@ def build_graph():
 graph = build_graph()
 
 
-def ask(question: str) -> str:
-    result = graph.invoke({"question": question})
+def ask(question: str, chat_history: list[dict[str, str]] | None = None) -> str:
+    result = graph.invoke({"question": question, "chat_history": chat_history or []})
     return result["answer"]
