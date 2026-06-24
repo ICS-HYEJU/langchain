@@ -40,9 +40,12 @@ class AgentState(TypedDict, total=False):
     web_results: list[dict[str, str]]
     answer: str
     needs_rewrite: bool
+    needs_web_search: bool
     used_web_search: bool
+    web_search_error: str
     attempts: int
     relevant_document_count: int
+    sufficiency_reason: str
 
 
 def _build_vector_store() -> Chroma:
@@ -64,14 +67,34 @@ retrieval_grader_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             """You grade whether a retrieved university academic administration document
-is useful for answering the user's question. Respond with only yes or no.
+is topically relevant to the user's question. Respond with only yes or no.
 
-Answer yes only when the document contains concrete information that can help answer
-the question. Answer no for unrelated, generic, or insufficient passages.""",
+Answer yes when the passage is about the same academic administration topic.
+Answer no for unrelated or generic passages.""",
+        ),
+        ("human", "Question:\n{question}\n\nDocument:\n{document}"),
+    ]
+)
+
+context_sufficiency_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You decide whether the provided internal university documents are sufficient
+to answer the user's question without web search.
+
+Respond in this exact format:
+decision: yes|no
+reason: short reason
+
+Use decision: yes only when the documents contain enough concrete information to answer
+the specific question. Use decision: no when the documents are only loosely related,
+outdated for the question, missing the requested detail, or when the question asks about
+current notices, schedules, URLs, forms, announcements, or information likely to change.""",
         ),
         (
             "human",
-            "Question:\n{question}\n\nDocument:\n{document}",
+            "Previous conversation:\n{chat_history}\n\nQuestion:\n{question}\n\nInternal documents:\n{context}",
         ),
     ]
 )
@@ -94,15 +117,16 @@ answer_prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             """당신은 대학 학사행정 문서 질의응답 도우미입니다.
-반드시 제공된 근거 문서, 웹검색 보조 근거, 이전 대화 맥락에 기반해 한국어로 답변하세요.
-최종 사실 판단은 내부 학사행정 문서를 우선하고, 웹검색 결과는 내부 문서가 부족할 때 보조 근거로만 사용하세요.
+반드시 제공된 내부 문서, 웹검색 보조 근거, 이전 대화 맥락에 기반해 한국어로 답변하세요.
+최종 사실 판단은 내부 학사행정 문서를 우선하고, 웹검색 결과는 내부 문서가 부족할 때 보조 근거로 사용하세요.
+웹검색을 사용했다면 답변에 웹검색 근거를 사용했다는 점을 자연스럽게 밝히세요.
 근거가 부족하면 추측하지 말고 확인이 필요하다고 말하세요.
 이전 대화 내용은 사용자의 후속 질문을 해석하는 용도로만 사용하세요.
 답변 끝에는 참고한 문서 또는 웹 출처를 간단히 적으세요.""",
         ),
         (
             "human",
-            "이전 대화:\n{chat_history}\n\n질문:\n{question}\n\n근거 문서:\n{context}\n\n웹검색 보조 근거:\n{web_context}",
+            "이전 대화:\n{chat_history}\n\n질문:\n{question}\n\n내부 근거 문서:\n{context}\n\n웹검색 보조 근거:\n{web_context}",
         ),
     ]
 )
@@ -163,12 +187,46 @@ def grade_documents(state: AgentState) -> AgentState:
     }
 
 
-def decide_after_grading(state: AgentState) -> Literal["rewrite", "web_search", "generate"]:
+def decide_after_grading(state: AgentState) -> Literal["rewrite", "web_search", "assess_context"]:
     if not state.get("needs_rewrite"):
-        return "generate"
+        return "assess_context"
     if state.get("attempts", 0) < 1:
         return "rewrite"
     if ENABLE_WEB_SEARCH and not state.get("used_web_search", False):
+        return "web_search"
+    return "assess_context"
+
+
+def assess_context_sufficiency(state: AgentState) -> AgentState:
+    documents = state.get("documents", [])
+    if not documents:
+        return {
+            **state,
+            "needs_web_search": ENABLE_WEB_SEARCH and not state.get("used_web_search", False),
+            "sufficiency_reason": "No relevant internal documents after grading.",
+        }
+
+    chain = context_sufficiency_prompt | llm | StrOutputParser()
+    response = chain.invoke(
+        {
+            "question": state["question"],
+            "context": format_document_context(documents),
+            "chat_history": format_chat_history(state.get("chat_history")),
+        }
+    )
+    normalized = response.strip().lower()
+    is_sufficient = "decision: yes" in normalized
+    return {
+        **state,
+        "needs_web_search": ENABLE_WEB_SEARCH
+        and not is_sufficient
+        and not state.get("used_web_search", False),
+        "sufficiency_reason": response.strip(),
+    }
+
+
+def decide_after_assessment(state: AgentState) -> Literal["web_search", "generate"]:
+    if state.get("needs_web_search"):
         return "web_search"
     return "generate"
 
@@ -189,35 +247,40 @@ def rewrite_question(state: AgentState) -> AgentState:
 
 
 def web_search(state: AgentState) -> AgentState:
+    question = state.get("rewritten_question") or state["question"]
+    search_query = f"site:{WEB_SEARCH_DOMAIN} {question}"
+
     if DDGS is None:
         return {
             **state,
             "used_web_search": True,
-            "web_results": [
-                {
-                    "title": "web search unavailable",
-                    "href": "",
-                    "body": "duckduckgo_search package is not installed.",
-                }
-            ],
+            "web_search_error": "duckduckgo_search package is not installed.",
+            "web_results": [],
         }
 
-    question = state.get("rewritten_question") or state["question"]
-    search_query = f"site:{WEB_SEARCH_DOMAIN} {question}"
     results: list[dict[str, str]] = []
-    with DDGS() as ddgs:
-        for item in ddgs.text(search_query, max_results=WEB_SEARCH_MAX_RESULTS):
-            results.append(
-                {
-                    "title": item.get("title", ""),
-                    "href": item.get("href", ""),
-                    "body": item.get("body", ""),
-                }
-            )
+    try:
+        with DDGS() as ddgs:
+            for item in ddgs.text(search_query, max_results=WEB_SEARCH_MAX_RESULTS):
+                results.append(
+                    {
+                        "title": item.get("title", ""),
+                        "href": item.get("href", ""),
+                        "body": item.get("body", ""),
+                    }
+                )
+    except Exception as exc:  # pragma: no cover - depends on network/search provider
+        return {
+            **state,
+            "used_web_search": True,
+            "web_search_error": f"{type(exc).__name__}: {exc}",
+            "web_results": [],
+        }
 
     return {
         **state,
         "used_web_search": True,
+        "web_search_error": "" if results else f"No web results for query: {search_query}",
         "web_results": results,
     }
 
@@ -233,7 +296,7 @@ def format_document_context(documents: list[Document]) -> str:
 
 def format_web_context(web_results: list[dict[str, str]] | None) -> str:
     if not web_results:
-        return "No web search was used."
+        return "No web search results were found."
     return "\n\n".join(
         f"[web: {result.get('title', 'untitled')}]\nURL: {result.get('href', '')}\n{result.get('body', '')}"
         for result in web_results
@@ -244,9 +307,11 @@ def generate_answer(state: AgentState) -> AgentState:
     documents = state.get("documents", [])
     web_results = state.get("web_results", [])
     if not documents and not web_results:
+        web_error = state.get("web_search_error")
+        detail = f" 웹검색도 수행했지만 실패했습니다: {web_error}" if web_error else ""
         return {
             **state,
-            "answer": "관련 학사행정 문서나 웹검색 보조 근거를 찾지 못했습니다. 문서를 추가로 적재하거나 질문을 더 구체화해 주세요.",
+            "answer": f"관련 학사행정 문서나 웹검색 보조 근거를 찾지 못했습니다.{detail} 문서를 추가로 적재하거나 질문을 더 구체화해 주세요.",
         }
 
     chain = answer_prompt | llm | StrOutputParser()
@@ -265,6 +330,7 @@ def build_graph():
     graph_builder = StateGraph(AgentState)
     graph_builder.add_node("retrieve", retrieve)
     graph_builder.add_node("grade_documents", grade_documents)
+    graph_builder.add_node("assess_context_sufficiency", assess_context_sufficiency)
     graph_builder.add_node("rewrite_question", rewrite_question)
     graph_builder.add_node("web_search", web_search)
     graph_builder.add_node("generate_answer", generate_answer)
@@ -276,6 +342,14 @@ def build_graph():
         decide_after_grading,
         {
             "rewrite": "rewrite_question",
+            "web_search": "web_search",
+            "assess_context": "assess_context_sufficiency",
+        },
+    )
+    graph_builder.add_conditional_edges(
+        "assess_context_sufficiency",
+        decide_after_assessment,
+        {
             "web_search": "web_search",
             "generate": "generate_answer",
         },

@@ -56,6 +56,8 @@ if question:
                         "attempts": result.get("attempts", 0),
                         "used_web_search": result.get("used_web_search", False),
                         "web_result_count": len(result.get("web_results", [])),
+                        "web_search_error": result.get("web_search_error", ""),
+                        "sufficiency_reason": result.get("sufficiency_reason", ""),
                         "remembered_messages": len(chat_history),
                     }
                 )
