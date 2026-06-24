@@ -8,7 +8,7 @@
 - 사용자 질문과 관련된 문서 검색
 - 검색 결과의 관련성 평가
 - 검색이 부족하면 질문 재작성 후 재검색
-- 재검색 후에도 근거가 부족하면 KHU 도메인 웹검색을 보조 근거로 검토
+- 재검색 후에도 근거가 부족하면 금오공과대학교 도메인 웹검색을 보조 근거로 검토
 - 근거 문서 기반 답변 생성
 - Streamlit UI로 질의응답 확인
 - 현재 브라우저 세션의 과거 대화 내용을 기억하고 후속 질문에 반영
@@ -74,12 +74,12 @@ academic_admin_agentic_rag/data/private_documents/
 
 관련 문서가 부족하면 질문을 한 번 재작성해 다시 검색합니다.
 재검색 후에도 관련 문서가 부족하거나, 관련 문서는 있지만 답변 충분성이 낮으면 웹검색을 수행합니다.
-기본 웹검색 도메인은 `khu.ac.kr`입니다. DuckDuckGo 검색이 제한되면 Bing 검색과 경희대/학과 후보 페이지 직접 조회를 순서대로 시도합니다.
+기본 웹검색 도메인은 `kumoh.ac.kr`입니다. DuckDuckGo 검색이 제한되면 Bing 검색과 금오공과대학교 후보 페이지 직접 조회를 순서대로 시도합니다.
 
 ```powershell
 $env:ACADEMIC_RAG_MIN_RELEVANT_DOCS="1"
 $env:ACADEMIC_RAG_ENABLE_WEB_SEARCH="true"
-$env:ACADEMIC_RAG_WEB_SEARCH_DOMAIN="khu.ac.kr"
+$env:ACADEMIC_RAG_WEB_SEARCH_DOMAIN="kumoh.ac.kr"
 $env:ACADEMIC_RAG_WEB_SEARCH_MAX_RESULTS="5"
 ```
 

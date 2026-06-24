@@ -261,7 +261,7 @@ def rewrite_question(state: AgentState) -> AgentState:
 
 
 def should_force_web_search(question: str) -> bool:
-    department_terms = ("학과", "전공", "전자공학", "전자공학과", "전자정보")
+    department_terms = ("학과", "전공", "전자공학", "전자공학과", "전자정보", "컴퓨터", "기계", "신소재")
     graduation_terms = ("졸업학점", "졸업 학점", "이수학점", "전공학점", "졸업요건", "교육과정")
     current_terms = ("최신", "현재", "공지", "일정", "신청기간", "URL", "링크", "홈페이지", "양식")
 
@@ -313,15 +313,15 @@ def build_web_search_queries(question: str) -> list[str]:
     if any(keyword in question for keyword in ("전자공학", "전자공학과", "전자정보")):
         queries.extend(
             [
-                "경희대학교 전자공학과 졸업 학점",
-                "경희대학교 전자정보대학 전자공학과 졸업요건",
-                "site:ce.khu.ac.kr 전자공학과 졸업 학점",
-                "site:ce.khu.ac.kr 졸업학점 전공필수 전자공학과",
+                "금오공과대학교 전자공학과 졸업 학점",
+                "금오공과대학교 전자공학과 졸업요건",
+                "site:kumoh.ac.kr 전자공학과 졸업 학점",
+                "site:kumoh.ac.kr 졸업학점 전공필수 전자공학과",
             ]
         )
 
     if "졸업" in question and "학점" in question:
-        queries.append(f"경희대학교 {question} 교육과정 졸업요건")
+        queries.append(f"금오공과대학교 {question} 교육과정 졸업요건")
 
     return list(dict.fromkeys(queries))
 
@@ -378,9 +378,9 @@ def search_bing(queries: list[str]) -> tuple[list[dict[str, str]], list[str]]:
 
 def search_candidate_pages(question: str) -> tuple[list[dict[str, str]], list[str]]:
     candidate_urls = [
-        "https://ce.khu.ac.kr/",
-        "https://www.khu.ac.kr/",
-        "https://haksa.khu.ac.kr/",
+        "https://www.kumoh.ac.kr/",
+        "https://eng.kumoh.ac.kr/",
+        "https://cic.kumoh.ac.kr/",
     ]
     results: list[dict[str, str]] = []
     errors: list[str] = []
