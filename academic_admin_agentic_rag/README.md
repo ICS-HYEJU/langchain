@@ -11,6 +11,12 @@
 - 근거 문서 기반 답변 생성
 - Streamlit UI로 질의응답 확인
 
+## Graph 구조
+
+LangGraph 노드 흐름은 아래 문서에서 확인할 수 있습니다.
+
+- [대학 학사행정 Agentic RAG Graph](../docs/graph_diagrams/academic_admin_agentic_rag.md)
+
 ## 폴더 구조
 
 ```text

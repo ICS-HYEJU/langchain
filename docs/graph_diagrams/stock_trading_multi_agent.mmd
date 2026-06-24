@@ -1,0 +1,18 @@
+flowchart TD
+    START([START])
+    SUPERVISOR{"supervisor<br/>다음 작업자 선택"}
+    MARKET["market_research<br/>시장 뉴스/거시 정보 조사"]
+    STOCK["stock_research<br/>최근 주가 데이터 조사"]
+    COMPANY["company_research<br/>재무 정보 및 SEC 공시 조사"]
+    ANALYST["analyst<br/>한국어 최종 투자 의견 생성"]
+    END([END])
+
+    START --> SUPERVISOR
+    SUPERVISOR -- "market_research" --> MARKET
+    SUPERVISOR -- "stock_research" --> STOCK
+    SUPERVISOR -- "company_research" --> COMPANY
+    SUPERVISOR -- "FINISH" --> ANALYST
+    MARKET --> SUPERVISOR
+    STOCK --> SUPERVISOR
+    COMPANY --> SUPERVISOR
+    ANALYST --> END
